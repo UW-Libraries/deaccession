@@ -57,3 +57,4 @@ if __name__ == "__main__":
 # add logging
 # add tests
 # make limit arg optional (default to limit=1)
+# write up README

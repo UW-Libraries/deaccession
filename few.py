@@ -1,6 +1,9 @@
 import requests
 import os
 import sys
+import argparse
+import json
+
 
 ALLIANCE_SYMBOLS = set([
     'CCD', 'CCV', 'CEO', 'CHK', 'CWU', 'EI1', 'EI1SP', 'EOS', 'ESR', 'GFC',
@@ -24,37 +27,57 @@ def get_wc_data(api_key, oclc_number):
     r = requests.get(url)
     return r.json()
 
-def get_api_key():
-    '''Get WorldCat API key, assumed to be in same directory as this script
-    and named "apikey.txt"'''
-    execpath = os.path.dirname(os.path.realpath(__file__))
-    keyfile = os.path.join(execpath, 'apikey.txt')
-    with open(keyfile) as fh:
-        return fh.read().strip()
+def get_config(configfile):
+    '''Load configuration file settings'''
+    with open(configfile) as fh:
+        config = json.load(fh)
+    return config
+
+def set_defaults(args):
+    '''Set defaults for arguments that are not specified'''
+    if not args['config']:
+        args['config'] = 'config.json'
+    if not args['limit']:
+        args['limit'] = 1
+    return args
 
 def main(argv=None):
-    if argv is None:
-        argv = sys.argv
-    oclc_num_file = argv[1]
-    home_inst_symbol = argv[2]
-    limit = int(argv[3])
-    api_key = get_api_key()
-    with open(oclc_num_file) as fh:
+    parser = argparse.ArgumentParser(description='Show items that have limited holdings in Alliance libraries.')
+    parser.add_argument("datafile", help="File with OCLC numbers to check")
+    parser.add_argument("-c", "--config", help="Config file path (defaults to './config.json')")
+    parser.add_argument("-l", "--limit", help="Holdings threshold (defaults to 1)", type=int)
+    parser.add_argument('-v', '--verbose', action='store_true', help="Show detailed output")
+    args = set_defaults(vars(parser.parse_args()))
+    args.update(get_config(args['config']))
+
+    datafile = args['datafile']
+    api_key = args['wc_api_key']
+    limit = args['limit']
+    verbose = args['verbose']
+    home_inst_symbol = args['home_institution_symbol']
+
+    if verbose:
+        print 'Home institution is %s' % home_inst_symbol
+        print 'Show items with Alliance holdings <= %d' % limit
+        print
+    with open(datafile) as fh:
         for rawline in fh:
             oclc_number = rawline.strip()
             wc_data = get_wc_data(api_key, oclc_number)
             alliance_holders = get_alliance_holders(wc_data)
             assert(home_inst_symbol in alliance_holders)
             if len(alliance_holders) <= limit:
-                print oclc_number
+                if verbose:
+                    print oclc_number, '|'.join(sorted(alliance_holders))
+                else:
+                    print oclc_number
 
 if __name__ == "__main__":
     sys.exit(main())
 
+
 # To-do
-# add usage info to main()
 # confirm alliance symbol list is correct
 # add logging
 # add tests
-# make limit arg optional (default to limit=1)
 # write up README

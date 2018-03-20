@@ -101,3 +101,4 @@ ENV/
 .mypy_cache/
 
 apikey.txt
+config.json

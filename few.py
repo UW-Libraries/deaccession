@@ -10,6 +10,7 @@ import json
 import logging
 import urlparse
 import requests
+from functools import partial
 
 LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +28,10 @@ def get_alliance_holders(wc_search_result):
     all_holders = set([item['oclcSymbol'] for item in wc_search_result['library']])
     alliance_holders = all_holders & ALLIANCE_SYMBOLS
     return alliance_holders
+
+def get_worldcat_holders(wc_search_result):
+    '''Return all Alliance holder symbols for a WorldCat JSON search result'''
+    return set([item['oclcSymbol'] for item in wc_search_result['library']])
 
 def get_wc_data(api_key, oclc_number):
     '''Get WorldCat search info for a given OCLC number'''
@@ -53,6 +58,38 @@ def set_defaults(args):
         args['limit'] = 1
     return args
 
+def output_record(args, oclc_number, holders):
+    output = ''
+    assert args['home_institution_symbol'] in holders
+    if len(holders) <= args['limit']:
+        if args['verbose']:
+            holder_syms = '|'.join(sorted(holders))
+            output += '%s\t%s' % (oclc_number, holder_syms)
+        else:
+            output += oclc_number
+    return output
+
+def output_worldcat(make_record, wc_data):
+    holders = get_worldcat_holders(wc_data)
+    return make_record(holders)
+
+def output_alliance(make_record, wc_data):
+    holders = get_alliance_holders(wc_data)
+    return make_record(holders)
+
+def make_outputter(wc):
+    if wc:
+        return output_worldcat
+    else:
+        return output_alliance
+
+def make_header(wc, limit):
+    if wc:
+        scope = 'WorldCat'
+    else:
+        scope = 'Alliance'
+    return 'Show items with %s holdings <= %d' % (scope, limit)
+
 def main():
     parser_desc = 'Show items that have limited holdings in Alliance libraries.'
     parser = argparse.ArgumentParser(description=parser_desc)
@@ -61,6 +98,7 @@ def main():
     parser.add_argument("-l", "--limit", help="Holdings threshold (defaults to 1)", type=int)
     parser.add_argument('-v', '--verbose', action='store_true', help="Show detailed output")
     parser.add_argument('-d', '--debug', action='store_true', help="Enable debug logging")
+    parser.add_argument("-w", "--worldcat", action='store_true', help="Search all WorldCat holdings (not just Alliance holdings)")
     args = set_defaults(vars(parser.parse_args()))
     args.update(get_config(args['config']))
 
@@ -69,22 +107,16 @@ def main():
     LOGGER.info('runtime arguments = %s', args)
 
     if args['verbose']:
-        print 'Home institution is %s' % args['home_institution_symbol']
-        print 'Show items with Alliance holdings <= %d' % args['limit']
+        print make_header(args['worldcat'], args['limit'])
         print
+    output_records = make_outputter(args['worldcat'])
     with open(args['datafile']) as datafile:
         for rawline in datafile:
             oclc_number = rawline.strip()
             wc_data = get_wc_data(args['wc_api_key'], oclc_number)
             LOGGER.debug('WorldCat data: %s', wc_data)
-            alliance_holders = get_alliance_holders(wc_data)
-            assert args['home_institution_symbol'] in alliance_holders
-            if len(alliance_holders) <= args['limit']:
-                if args['verbose']:
-                    holder_syms = '|'.join(sorted(alliance_holders))
-                    print '%s\t%s' % (oclc_number, holder_syms)
-                else:
-                    print oclc_number
+            make_record = partial(output_record, args, oclc_number)
+            print output_records(make_record, wc_data)
 
 if __name__ == "__main__":
     sys.exit(main())

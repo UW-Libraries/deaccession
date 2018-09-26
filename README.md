@@ -5,7 +5,7 @@ Scripts for use in helping with deaccession/weeding library collections. Current
 
 ### Prerequisites
 
-You will need Python 2.7.x and the requests library (http://docs.python-requests.org/en/master/).  
+You will need Python 3.x and the requests library (http://docs.python-requests.org/en/master/).  
 
 ### Installing
 

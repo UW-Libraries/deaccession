@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 '''This script is used to find items held by a limited number of
 Orbis Cascade Alliance members.
@@ -8,7 +8,7 @@ import sys
 import argparse
 import json
 import logging
-import urlparse
+from urllib.parse import urljoin
 import requests
 from functools import partial
 
@@ -23,26 +23,92 @@ ALLIANCE_SYMBOLS = set([
     'WS7', 'WS7SP', 'WSE', 'WSL', 'XFF', 'XOE', 'ZXQ'
 ])
 
-def get_alliance_holders(wc_search_result):
-    '''Return all Alliance holder symbols for a WorldCat JSON search result'''
-    all_holders = set([item['oclcSymbol'] for item in wc_search_result['library']])
-    alliance_holders = all_holders & ALLIANCE_SYMBOLS
-    return alliance_holders
+# --- Process API data for output
 
-def get_worldcat_holders(wc_search_result):
-    '''Return all Alliance holder symbols for a WorldCat JSON search result'''
-    return set([item['oclcSymbol'] for item in wc_search_result['library']])
+def process_recs(limit, wc, recs):
+    '''Massage data for output by...
+    1. Simplifying records to contain only relevant fields
+    2. Selecting either all WorldCat holdings or just Alliance holdings
+    3. Selecting only records that have few holdings
+    '''
+    simplify_recs = partial(map, partial(simplify_rec, wc))
+    cull_holdings = partial(map, partial(filter_holdings, wc))
+    filter_recs = partial(filter, partial(few_holdings_exist, limit))
+    return list(filter_recs(cull_holdings(simplify_recs(recs))))
 
-def get_wc_data(api_key, oclc_number):
+def simplify_rec(wc, rec):
+    '''Eliminate irrelevant fields from record'''
+    holders = set([item['oclcSymbol'] for item in rec['library']])
+    return {
+        'oclcnum': rec['OCLCnumber'],
+        'holders': holders,
+    }
+
+def few_holdings_exist(limit, rec):
+    '''Return True if number of holdings is <= limit'''
+    return len(rec['holders']) <= limit
+
+def filter_holdings(wc, rec):
+    '''Eliminate non-Alliance holdings if requested'''
+    if not wc:
+        rec['holders'] &= ALLIANCE_SYMBOLS
+    return rec
+
+# --- Render ouput
+
+def render_recs(wc, limit, verbose, recs):
+    '''Create a string for output from input records'''
+    lines = []
+    if verbose:
+        lines.append(render_header(wc, limit))
+        lines.append('')
+    for rec in recs:
+        lines.append(render_rec(verbose, rec))
+    return '\n'.join(lines)
+
+def render_header(wc, limit):
+    '''Create header string depending on holdings type requested'''
+    scope = 'WorldCat' if wc else 'Alliance'
+    return 'Show items with {} holdings <= {}'.format(scope, limit) 
+
+def render_rec(verbose, rec):
+    '''Create an output string for the record'''
+    output = ''
+    if verbose:
+        holder_syms = '|'.join(sorted(rec['holders']))
+        output += '{}\t{}'.format(rec['oclcnum'], holder_syms)
+    else:
+        output += rec['oclcnum']
+    return output
+
+# -----------------------------
+
+def get_args():
+    '''Get command line arguments as well as configuration settings'''
+    parser_desc = 'Show items that have limited holdings in Alliance libraries.'
+    parser = argparse.ArgumentParser(description=parser_desc)
+    parser.add_argument("datafile", help="File with OCLC numbers to check")
+    parser.add_argument("-c", "--config", help="Config file path (defaults to './config.json')", default='config.json')
+    parser.add_argument("-l", "--limit", help="Holdings threshold (defaults to 1)", default=1, type=int)
+    parser.add_argument('-v', '--verbose', action='store_true', help="Show detailed output")
+    parser.add_argument('-d', '--debug', action='store_true', help="Enable debug logging")
+    parser.add_argument("-w", "--worldcat", action='store_true', help="Search all WorldCat holdings (not just Alliance holdings)")
+    args = vars(parser.parse_args())
+    args.update(get_config(args['config']))
+    return args
+
+def get_api_data(api_key, oclc_number):
     '''Get WorldCat search info for a given OCLC number'''
     base = 'http://www.worldcat.org/webservices/catalog/content/libraries'
-    rest = '%s?wskey=%s&format=json&location=98195&maximumLibraries=100&libtype=1'
-    url_template = urlparse.urljoin(base, rest)
-    url = url_template % (oclc_number, api_key)
+    rest = '{}?wskey={}&format=json&location=98195&maximumLibraries=100&libtype=1'
+    url_template = urljoin(base, rest)
+    url = url_template.format(oclc_number, api_key)
     response = requests.get(url)
     if response.status_code != 200:
         response.raise_for_status()
-    return response.json()
+    data = response.json()
+    LOGGER.debug('WorldCat data: {}'.format(data))
+    return data
 
 def get_config(configfilepath):
     '''Load configuration file settings'''
@@ -50,73 +116,29 @@ def get_config(configfilepath):
         config = json.load(configfile)
     return config
 
-def set_defaults(args):
-    '''Set defaults for arguments that are not specified'''
-    if not args['config']:
-        args['config'] = 'config.json'
-    if not args['limit']:
-        args['limit'] = 1
-    return args
+def oclc_numbers(datafile):
+    '''Generator for OCLC number data'''
+    with open(datafile) as data:
+        for rawline in data:
+            yield rawline.strip()
 
-def output_record(args, oclc_number, holders):
-    output = ''
-    assert args['home_institution_symbol'] in holders
-    if len(holders) <= args['limit']:
-        if args['verbose']:
-            holder_syms = '|'.join(sorted(holders))
-            output += '%s\t%s' % (oclc_number, holder_syms)
-        else:
-            output += oclc_number
-    return output
-
-def output_worldcat(make_record, wc_data):
-    holders = get_worldcat_holders(wc_data)
-    return make_record(holders)
-
-def output_alliance(make_record, wc_data):
-    holders = get_alliance_holders(wc_data)
-    return make_record(holders)
-
-def make_outputter(wc):
-    if wc:
-        return output_worldcat
-    else:
-        return output_alliance
-
-def make_header(wc, limit):
-    if wc:
-        scope = 'WorldCat'
-    else:
-        scope = 'Alliance'
-    return 'Show items with %s holdings <= %d' % (scope, limit)
+def get_records(get_data, oclc_nums):
+    '''Generator for WorldCat data'''
+    for oclc_number in oclc_nums:
+        yield get_data(oclc_number)
 
 def main():
-    parser_desc = 'Show items that have limited holdings in Alliance libraries.'
-    parser = argparse.ArgumentParser(description=parser_desc)
-    parser.add_argument("datafile", help="File with OCLC numbers to check")
-    parser.add_argument("-c", "--config", help="Config file path (defaults to './config.json')")
-    parser.add_argument("-l", "--limit", help="Holdings threshold (defaults to 1)", type=int)
-    parser.add_argument('-v', '--verbose', action='store_true', help="Show detailed output")
-    parser.add_argument('-d', '--debug', action='store_true', help="Enable debug logging")
-    parser.add_argument("-w", "--worldcat", action='store_true', help="Search all WorldCat holdings (not just Alliance holdings)")
-    args = set_defaults(vars(parser.parse_args()))
-    args.update(get_config(args['config']))
-
+    args = get_args()
     log_level = logging.DEBUG if args['debug'] else logging.ERROR
     logging.basicConfig(level=log_level)
-    LOGGER.info('runtime arguments = %s', args)
+    LOGGER.info('runtime arguments = {}'.format(args))
 
-    if args['verbose']:
-        print make_header(args['worldcat'], args['limit'])
-        print
-    output_records = make_outputter(args['worldcat'])
-    with open(args['datafile']) as datafile:
-        for rawline in datafile:
-            oclc_number = rawline.strip()
-            wc_data = get_wc_data(args['wc_api_key'], oclc_number)
-            LOGGER.debug('WorldCat data: %s', wc_data)
-            make_record = partial(output_record, args, oclc_number)
-            print output_records(make_record, wc_data)
+    get_data = partial(get_api_data, args['wc_api_key'])
+    rawrecs = get_records(get_data, oclc_numbers(args['datafile']))
+    recs = process_recs(args['limit'], args['worldcat'], rawrecs)
+    # ensure that home institution exists in holdings
+    assert all(args['home_institution_symbol'] in rec['holders'] for rec in recs)
+    print(render_recs(args['worldcat'], args['limit'], args['verbose'], recs))
 
 if __name__ == "__main__":
     sys.exit(main())

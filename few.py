@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding: utf8
 
 '''This script is used to find items held by a limited number of
 Orbis Cascade Alliance members.
@@ -7,10 +8,10 @@ Orbis Cascade Alliance members.
 import sys
 import argparse
 import json
+from lxml import etree as ET
 import logging
 from urllib.parse import urljoin
 import requests
-from functools import partial
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,36 +24,19 @@ ALLIANCE_SYMBOLS = set([
     'WS7', 'WS7SP', 'WSE', 'WSL', 'XFF', 'XOE', 'ZXQ'
 ])
 
-# --- Process API data for output
+# --- Prep data
 
-def process_recs(limit, wc, recs):
-    '''Massage data for output by...
-    1. Simplifying records to contain only relevant fields
-    2. Selecting either all WorldCat holdings or just Alliance holdings
-    3. Selecting only records that have few holdings
-    '''
-    simplify_recs = partial(map, partial(simplify_rec, wc))
-    cull_holdings = partial(map, partial(filter_holdings, wc))
-    filter_recs = partial(filter, partial(few_holdings_exist, limit))
-    return list(filter_recs(cull_holdings(simplify_recs(recs))))
+def extract_holders(response, alliance_only=False):
+    root = ET.fromstring(bytes(response, 'utf-8'))
+    holdings = root.findall('holding')
+    holders = set(h.find('institutionIdentifier/value').text for h in holdings)
+    if alliance_only:
+        holders &= ALLIANCE_SYMBOLS
+    return holders
 
-def simplify_rec(wc, rec):
-    '''Eliminate irrelevant fields from record'''
-    holders = set([item['oclcSymbol'] for item in rec['library']])
-    return {
-        'oclcnum': rec['OCLCnumber'],
-        'holders': holders,
-    }
 
-def few_holdings_exist(limit, rec):
-    '''Return True if number of holdings is <= limit'''
-    return len(rec['holders']) <= limit
-
-def filter_holdings(wc, rec):
-    '''Eliminate non-Alliance holdings if requested'''
-    if not wc:
-        rec['holders'] &= ALLIANCE_SYMBOLS
-    return rec
+def filter_few(limit, recs):
+    return [rec for rec in recs if len(rec['holders']) <= limit]
 
 # --- Render ouput
 
@@ -66,10 +50,12 @@ def render_recs(wc, limit, verbose, recs):
         lines.append(render_rec(verbose, rec))
     return '\n'.join(lines)
 
+
 def render_header(wc, limit):
     '''Create header string depending on holdings type requested'''
     scope = 'WorldCat' if wc else 'Alliance'
     return 'Show items with {} holdings <= {}'.format(scope, limit) 
+
 
 def render_rec(verbose, rec):
     '''Create an output string for the record'''
@@ -81,7 +67,7 @@ def render_rec(verbose, rec):
         output += rec['oclcnum']
     return output
 
-# -----------------------------
+# --- I/O etc.
 
 def get_args():
     '''Get command line arguments as well as configuration settings'''
@@ -97,18 +83,6 @@ def get_args():
     args.update(get_config(args['config']))
     return args
 
-def get_api_data(api_key, oclc_number):
-    '''Get WorldCat search info for a given OCLC number'''
-    base = 'http://www.worldcat.org/webservices/catalog/content/libraries'
-    rest = '{}?wskey={}&format=json&location=98195&maximumLibraries=100&libtype=1'
-    url_template = urljoin(base, rest)
-    url = url_template.format(oclc_number, api_key)
-    response = requests.get(url)
-    if response.status_code != 200:
-        response.raise_for_status()
-    data = response.json()
-    LOGGER.debug('WorldCat data: {}'.format(data))
-    return data
 
 def get_config(configfilepath):
     '''Load configuration file settings'''
@@ -116,29 +90,50 @@ def get_config(configfilepath):
         config = json.load(configfile)
     return config
 
+
 def oclc_numbers(datafile):
     '''Generator for OCLC number data'''
     with open(datafile) as data:
         for rawline in data:
             yield rawline.strip()
 
-def get_records(get_data, oclc_nums):
-    '''Generator for WorldCat data'''
-    for oclc_number in oclc_nums:
-        yield get_data(oclc_number)
+
+def get_api_data(api_key, oclc_number):
+    '''Get WorldCat search info for a given OCLC number'''
+    base = 'http://www.worldcat.org/webservices/catalog/content/libraries'
+    rest = '{}?wskey={}&location=98195&maximumLibraries=100&libtype=1'
+    url_template = urljoin(base, rest)
+    url = url_template.format(oclc_number, api_key)
+    LOGGER.debug('WorldCat request: {}'.format(url))
+    response = requests.get(url)
+    if response.status_code != 200:
+        response.raise_for_status()
+    LOGGER.debug('WorldCat response headers: {}'.format(response.headers))
+    LOGGER.debug('WorldCat data: {}'.format(response.text))
+    return response.text
+
 
 def main():
     args = get_args()
+    alliance_only = not args['worldcat']
     log_level = logging.DEBUG if args['debug'] else logging.ERROR
     logging.basicConfig(level=log_level)
-    LOGGER.info('runtime arguments = {}'.format(args))
+    LOGGER.debug('runtime arguments = {}'.format(args))
+    api_responses = (
+        (oclc_number, get_api_data(args['wc_api_key'], oclc_number))
+        for oclc_number in oclc_numbers(args['datafile'])
+    )
+    recs = [
+        {'oclcnum': oclc_number, 'holders': extract_holders(response, alliance_only)}
+        for (oclc_number, response) in api_responses
+    ]
+    LOGGER.debug('Data: {}'.format(recs))
+    filtered = filter_few(args['limit'], recs)
+    LOGGER.debug('Filtered data: {}'.format(filtered))
+    assert all(args['home_institution_symbol'] in rec['holders'] for rec in filtered)
+    print(render_recs(args['worldcat'], args['limit'], args['verbose'], filtered))
 
-    get_data = partial(get_api_data, args['wc_api_key'])
-    rawrecs = get_records(get_data, oclc_numbers(args['datafile']))
-    recs = process_recs(args['limit'], args['worldcat'], rawrecs)
-    # ensure that home institution exists in holdings
-    assert all(args['home_institution_symbol'] in rec['holders'] for rec in recs)
-    print(render_recs(args['worldcat'], args['limit'], args['verbose'], recs))
 
 if __name__ == "__main__":
     sys.exit(main())
+

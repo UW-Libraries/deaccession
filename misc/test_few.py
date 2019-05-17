@@ -1,41 +1,75 @@
+#!/usr/bin/env python3
+# coding: utf8
+
 import unittest
 import json
 import few
 
 
-class TestSimplify(unittest.TestCase):
-    def test_record_is_simplified(self):
-        rec = {'OCLCnumber': 123, 'library': []}
-        result = few.simplify_rec(True, rec)
-        expected = {'oclcnum': 123, 'holders': set()}
+class TestExtractHolders(unittest.TestCase):
+    API_DATA = """<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<holdings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.loc.gov/standards/iso20775/N121_ISOholdings_v4.xsd">
+<holding>
+<institutionIdentifier>
+<value>WAU</value>
+</institutionIdentifier>
+</holding>
+<holding>
+<institutionIdentifier>
+<value>CCD</value>
+</institutionIdentifier>
+</holding>
+<holding>
+<institutionIdentifier>
+<value>XXX</value>
+</institutionIdentifier>
+</holding>
+</holdings>"""
+
+    def test_unrestricted_response(self):
+        oclc_number = '12345'
+        expected = set(['WAU', 'CCD', 'XXX'])
+        response = few.extract_holders(TestExtractHolders.API_DATA)
+        self.assertEqual(response, expected)
+
+    def test_alliance_only_response(self):
+        oclc_number = '12345'
+        expected = set(['WAU', 'CCD'])
+        response = few.extract_holders(TestExtractHolders.API_DATA, True)
+        self.assertEqual(response, expected)
+
+
+class TestFilterFew(unittest.TestCase):
+    def test_more_than_limit(self):
+        recs = [{
+            'oclcnum': '12345',
+            'holders': set(['WAU', 'CCD', 'XXX'])
+        }]
+        result = few.filter_few(2, recs)
+        self.assertEqual(result, [])
+
+    def test_equal_to_limit(self):
+        recs = [{
+            'oclcnum': '12345',
+            'holders': set(['WAU', 'CCD'])
+        }]
+        expected = [{
+            'oclcnum': '12345',
+            'holders': set(['WAU', 'CCD'])
+        }]
+        result = few.filter_few(2, recs)
         self.assertEqual(result, expected)
 
-
-class TestFewHoldingsExist(unittest.TestCase):
-    def test_more_holdings_than_limit(self):
-        rec = {'oclcnum': 123, 'holders': set(['AAA', 'BBB'])}
-        self.assertFalse(few.few_holdings_exist(1, rec))
-
-    def test_holdings_equals_limit(self):
-        rec = {'oclcnum': 123, 'holders': set(['AAA', 'BBB'])}
-        self.assertTrue(few.few_holdings_exist(2, rec))
-
-    def test_less_holdings_than_limit(self):
-        rec = {'oclcnum': 123, 'holders': set(['AAA', 'BBB'])}
-        self.assertTrue(few.few_holdings_exist(3, rec))
-
-
-class TestFilterHoldings(unittest.TestCase):
-    def test_filter_off(self):
-        rec = {'oclcnum': 123, 'holders': set(['CCD', 'XXX'])}
-        result = few.filter_holdings(True, rec)
-        expected = {'oclcnum': 123, 'holders': set(['CCD', 'XXX'])}
-        self.assertEqual(result, expected)
-
-    def test_filter_on(self):
-        rec = {'oclcnum': 123, 'holders': set(['CCD', 'XXX'])}
-        result = few.filter_holdings(False, rec)
-        expected = {'oclcnum': 123, 'holders': set(['CCD'])}
+    def test_fewer_than_limit(self):
+        recs = [{
+            'oclcnum': '12345',
+            'holders': set(['WAU'])
+        }]
+        expected = [{
+            'oclcnum': '12345',
+            'holders': set(['WAU'])
+        }]
+        result = few.filter_few(2, recs)
         self.assertEqual(result, expected)
 
 

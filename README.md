@@ -20,15 +20,15 @@ You will need Python 3.x and the requests library (http://docs.python-requests.o
 
 3. Run the script
 
-    Enter ```python few.py -h``` at the command line. Usage instructions will appear.  
+    Enter ```python3 few.py -h``` at the command line. Usage instructions will appear.  
 
 ### Example usage
 
-```python few.py --limit 3 <file-with-oclc-numbers>```   
+```python3 few.py --limit 3 <file-with-oclc-numbers>```   
 
 This example will display all of the OCLC numbers from the given file that are held by 3 or fewer Orbis Cascade Alliance members. The file with OCLC numbers should contain one number per line. An example data file (example-data.txt) is in the *misc* folder  
 
-```python few.py --limit 3 --verbose <file-with-oclc-numbers>```   
+```python3 few.py --limit 3 --verbose <file-with-oclc-numbers>```   
 
 This example will do the same as above but will show additional information such as the holding symbol for each institution that has the item.  
 
